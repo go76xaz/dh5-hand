@@ -1,0 +1,40 @@
+# Virtual environments - recreate with:
+#   python -m venv .venv && .venv/Scripts/pip install -r requirements-dev.txt
+.venv/
+venv/
+venv_new/
+env/
+ENV/
+
+# Python build and cache artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+*.so
+
+# Test and type-checker caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.swp
+*~
+
+# ROS2 build output
+install/
+log/
+build/
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dh5"
+version = "1.0.0"
+description = "Control library, command prompt and ROS 2 node for the DH-Robotics DH5 six-axis hand"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["pyserial>=3.5"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+dh5 = "dh5.__main__:main"
+
+[project.gui-scripts]
+dh5-gui = "dh5.gui:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

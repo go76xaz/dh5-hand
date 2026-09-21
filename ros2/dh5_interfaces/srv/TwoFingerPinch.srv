@@ -1,0 +1,7 @@
+# Request
+int32 width          # 0-25, see dh5.gestures
+string axis_mode     # "axis2" (default) or "axis3"
+---
+# Response
+bool success
+string message

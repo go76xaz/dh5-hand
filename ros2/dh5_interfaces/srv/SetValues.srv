@@ -1,0 +1,5 @@
+uint32[]  value      # 请求部分：发送一个 uint16 数组
+---
+bool success         # 响应部分：操作是否成功
+string message       # 响应部分：可选的返回信息
+

@@ -1,0 +1,10 @@
+# Request
+# Move several axes to (possibly different) percent positions (0-100)
+# at the same instant, in one Modbus frame (DH5Hand.move()).
+# axes[i] moves to percents[i]; both arrays must be the same length.
+int32[] axes
+float64[] percents
+---
+# Response
+bool success
+string message
