@@ -7,12 +7,22 @@ package_name = 'dh5_controller'
 setup(
     name=package_name,
     version='0.0.1',
-    packages=[package_name, f"{package_name}.clients"],
+    # 'dh5' is a symlink (ros2/dh5_controller/dh5 -> ../../src/dh5) to the
+    # library that does the actual hardware work. Listing it here makes
+    # `colcon build --symlink-install` install it alongside this package,
+    # so `import dh5` works for anyone who built the workspace - no
+    # `pip install` of the dh5 library required.
+    packages=[package_name, f"{package_name}.clients", 'dh5'],
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
     ],
+    # Not listing pyserial here on purpose: `setup.py develop` (what
+    # colcon --symlink-install runs) would try to fetch missing deps from
+    # PyPI via easy_install, which needs pip/network anyway. Make sure
+    # `python3 -c "import serial"` works before building (apt install
+    # python3-serial, or a `pip install --user pyserial` if pip is set up).
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='User',

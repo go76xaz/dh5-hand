@@ -1,9 +1,13 @@
 """ROS2 node for the DH5 six-axis hand, built on the `dh5` library.
 
 Everything hardware-related (Modbus, percent conversion, gestures) lives in
-the `dh5` package - install it into the ROS Python environment once:
-
-    pip install -e "<path>/DH5 SDK/DH5_venv"
+the `dh5` package. `ros2/dh5_controller/dh5` is a symlink to the real
+`src/dh5`, and this package's setup.py lists it as one of its own packages,
+so a plain `colcon build --symlink-install` makes `import dh5` work for this
+node - no separate `pip install` of the library needed. `pyserial` is still
+a real third-party dependency though: make sure `python3 -c "import serial"`
+works in the environment you build/run with (apt install python3-serial, or
+pip if you have it) before building.
 
 This node only translates ROS services into `DH5Hand` calls and back.
 
