@@ -8,9 +8,9 @@ class SetSpeedClient(Node):
 
         self.declare_parameter('values', [100, 100, 100, 100, 100, 100])
 
-        self.cli = self.create_client(SetValues, 'dh5/set_speed')
+        self.cli = self.create_client(SetValues, 'dh5/raw/set_speed')
         while not self.cli.wait_for_service(timeout_sec=0.05):
-            self.get_logger().info('等待服务 dh5/set_speed...')
+            self.get_logger().info('等待服务 dh5/raw/set_speed...')
 
     def send_request(self):
 

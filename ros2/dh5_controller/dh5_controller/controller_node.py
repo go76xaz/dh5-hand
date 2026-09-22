@@ -38,6 +38,7 @@ from dh5_interfaces.msg import AxisInfos
 from dh5_interfaces.srv import (
     Initialize,
     MoveAxesPercent,
+    SetAxesValues,
     SetAxisValue,
     SetValues,
     TwoFingerPinch,
@@ -107,13 +108,19 @@ class DH5Controller(Node):
 
         self.pub_joint_state = self.create_publisher(AxisInfos, 'dh5/AxisInfos', 10)
 
-        # --- Raw / low-level services -----------------------------------
+        # --- Raw / low-level services -------------------------------------
+        # Namespaced under dh5/raw/ so they don't shadow the intended,
+        # percent-/axis-based services below in `ros2 service list` or tab
+        # completion. These write raw register units with no percent
+        # conversion and require a value for every axis - prefer
+        # move_axis(es)_percent / set_axis(es)_speed / set_axis_force unless
+        # you specifically need to bypass that.
         for name, handler in (
             ('set_position', self.set_position_cb),
             ('set_speed', self.set_speed_cb),
             ('set_force', self.set_force_cb),
         ):
-            self.create_service(SetValues, f'dh5/{name}', handler, callback_group=self.hw_group)
+            self.create_service(SetValues, f'dh5/raw/{name}', handler, callback_group=self.hw_group)
 
         for name, handler in (
             ('set_axis_position', self.set_axis_position_cb),
@@ -124,6 +131,8 @@ class DH5Controller(Node):
             self.create_service(SetAxisValue, f'dh5/{name}', handler, callback_group=self.hw_group)
 
         self.create_service(MoveAxesPercent, 'dh5/move_axes_percent', self.move_axes_percent_cb,
+                            callback_group=self.hw_group)
+        self.create_service(SetAxesValues, 'dh5/set_axes_speed', self.set_axes_speed_cb,
                             callback_group=self.hw_group)
         self.create_service(Initialize, 'dh5/initialize', self.initialize_cb,
                             callback_group=self.hw_group)
@@ -206,6 +215,14 @@ class DH5Controller(Node):
 
     def set_axis_speed_cb(self, request, response):
         return self._run(response, lambda: self.hand.set_speed(request.axis, request.value))
+
+    def set_axes_speed_cb(self, request, response):
+        if len(request.axes) != len(request.values):
+            response.success = False
+            response.message = "'axes' and 'values' must be the same length."
+            return response
+        axis_speeds = dict(zip(request.axes, request.values))
+        return self._run(response, lambda: self.hand.set_speeds(axis_speeds))
 
     def set_axis_force_cb(self, request, response):
         return self._run(response, lambda: self.hand.set_force(request.axis, request.value))

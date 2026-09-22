@@ -8,9 +8,9 @@ class SetForceClient(Node):
 
         self.declare_parameter('values', [100, 100, 100, 100, 100, 100])
 
-        self.cli = self.create_client(SetValues, 'dh5/set_force')
+        self.cli = self.create_client(SetValues, 'dh5/raw/set_force')
         while not self.cli.wait_for_service(timeout_sec=0.05):
-            self.get_logger().info('等待服务 dh5/set_force...')
+            self.get_logger().info('等待服务 dh5/raw/set_force...')
 
     def send_request(self):
 

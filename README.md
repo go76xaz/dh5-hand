@@ -70,9 +70,9 @@ Launch arguments: `port`, `baud_rate`, `modbus_id`, `publish_period`.
 | --- | --- | --- |
 | `dh5/AxisInfos` (topic) | `AxisInfos` | position, velocity, current, faults of every axis |
 | `dh5/initialize` | `Initialize` | initialize the hand (mode 1 close, 2 open, 3 find stroke) |
-| `dh5/set_position`, `set_speed`, `set_force` | `SetValues` | all axes at once |
 | `dh5/set_axis_position`, `set_axis_speed`, `set_axis_force`, `move_axis_percent` | `SetAxisValue` | one axis |
-| `dh5/move_axes_percent` | `MoveAxesPercent` | several axes to different percentages, simultaneously |
+| `dh5/move_axes_percent`, `set_axes_speed` | `MoveAxesPercent`, `SetAxesValues` | several axes at once, others left untouched |
+| `dh5/raw/set_position`, `set_speed`, `set_force` | `SetValues` | low-level: raw register units, all 6 axes required, no completion wait - prefer the services above |
 | `dh5/clear_cur_fault`, `clear_history_faults`, `restart_system`, `get_faults` | `std_srvs/Trigger` | fault handling |
 | `dh5/<gesture>` | `Trigger` or `TwoFingerPinch` | one service per entry in `dh5/gestures.py` |
 

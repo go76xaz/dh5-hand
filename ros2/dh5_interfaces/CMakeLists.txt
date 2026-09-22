@@ -12,6 +12,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/Initialize.srv"
   "srv/SetValues.srv"
   "srv/MoveAxesPercent.srv"
+  "srv/SetAxesValues.srv"
   "srv/TwoFingerPinch.srv"
   "msg/AxisInfos.msg"
    DEPENDENCIES std_msgs builtin_interfaces

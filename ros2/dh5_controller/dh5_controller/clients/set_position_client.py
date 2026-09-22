@@ -8,9 +8,9 @@ class SetPositionClient(Node):
 
         self.declare_parameter('values', [400, 1000, 1000, 1000, 1000, 400])
 
-        self.cli = self.create_client(SetValues, 'dh5/set_position')
+        self.cli = self.create_client(SetValues, 'dh5/raw/set_position')
         while not self.cli.wait_for_service(timeout_sec=0.05):
-            self.get_logger().info('等待服务 dh5/set_position...')
+            self.get_logger().info('等待服务 dh5/raw/set_position...')
 
     def send_request(self):
 

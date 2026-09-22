@@ -1,0 +1,11 @@
+# Request
+# Set several axes to (possibly different) raw setpoint values at once,
+# leaving every other axis at its current setpoint (DH5Hand._set_axis_values
+# via set_speeds()/set_forces()).
+# axes[i] gets values[i]; both arrays must be the same length.
+int32[] axes
+int32[] values
+---
+# Response
+bool success
+string message
