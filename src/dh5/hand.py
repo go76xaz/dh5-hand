@@ -165,9 +165,17 @@ class DH5Hand:
         timeout: float = 20.0,
         poll_interval: Optional[float] = None,
         clear_faults: bool = True,
+        settle_after: float = 3.0,
     ) -> bool:
-        """Clear faults, send `initialize(mode)`, and poll until every axis
-        reports 'initialized'. Returns True when the hand is ready.
+        """Clear faults, send `initialize(mode)` for all axes at once, wait
+        until the status register reports every axis 'initialized', then
+        pause `settle_after` seconds before returning. Returns True once
+        that pause has elapsed.
+
+        The status register was observed to report 'initialized' before an
+        axis has actually finished physically homing, so `settle_after` is
+        a flat, unconditional pause rather than something to poll away -
+        there is nothing further to check that isn't already lying.
 
         The connection must already be open - call `connect()` or use the
         class as a context manager first.
@@ -185,7 +193,12 @@ class DH5Hand:
             logger.error("Initialization command failed: %s", status)
             return False
 
-        return self.wait_for_initialization(timeout=timeout, poll_interval=poll_interval)
+        if not self.wait_for_initialization(timeout=timeout, poll_interval=poll_interval):
+            return False
+
+        logger.info("Waiting %.1fs for axes to finish physically homing...", settle_after)
+        time.sleep(settle_after)
+        return True
 
     def wait_for_initialization(self, timeout: float = 20.0, poll_interval: Optional[float] = None) -> bool:
         poll_interval = self.poll_interval if poll_interval is None else poll_interval

@@ -131,6 +131,23 @@ class TestPerform:
         with pytest.raises(ValueError):
             gestures.perform(hand, "open_hand", width=5)
 
+    def test_wink2_moves_to_99_then_staggers_axes_2_to_5(self, hand, device, monkeypatch):
+        monkeypatch.setattr(gestures.time, "sleep", lambda seconds: None)
+        for axis in range(1, 7):
+            device.set_position_percent(axis, 50)
+        device.writes.clear()
+
+        results = gestures.perform(hand, "wink2", wait=False)
+
+        assert len(results) == 2
+        assert device.setpoints("position")[0] == round(reg.AXIS_LIMITS[1][1] * 0.99)  # axis 1
+        assert device.setpoints("position")[5] == round(reg.AXIS_LIMITS[6][1] * 0.20)  # axis 6
+
+        stagger_writes = [w for w in device.writes if len(w[1]) == 1]
+        assert len(stagger_writes) == 8
+        moved_axes = [(w[0] - reg.SETPOINT_BASE["position"]) + 1 for w in stagger_writes]
+        assert moved_axes == [2, 3, 4, 5, 2, 3, 4, 5]
+
     def test_point_prepares_axes_before_the_combined_move(self, hand, device):
         for axis in range(1, 7):
             device.set_position_percent(axis, 0)

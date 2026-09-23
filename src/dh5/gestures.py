@@ -35,6 +35,13 @@ class Pose:
         Axes to move individually first, each only if it currently sits
         below the given target. Used where a pose needs one finger out of
         the way before the rest can move together.
+    stagger
+        Axes moved individually with staggered start times rather than as
+        one batch: (axis, target_percent, delay) tuples, `delay` being
+        seconds after this pose starts. Each move is issued non-blocking,
+        so a later entry can start while an earlier one is still
+        travelling. Mutually exclusive with `fixed`/`ramp` on the same
+        pose.
     pause_after
         Seconds to sleep once the move completes.
     """
@@ -43,6 +50,7 @@ class Pose:
     ramp: Mapping[int, Tuple[float, float]] = field(default_factory=dict)
     require_above: Tuple[int, ...] = ()
     prepare: Tuple[Tuple[int, float], ...] = ()
+    stagger: Tuple[Tuple[int, float, float], ...] = ()
     pause_after: float = 0.0
 
     def targets(self, width: float = 0.0, max_width: float = 0.0) -> Dict[int, float]:
@@ -57,13 +65,20 @@ class Pose:
 
 @dataclass(frozen=True)
 class Gesture:
-    """A named sequence of poses, optionally in several variants."""
+    """A named sequence of poses, optionally in several variants.
+
+    ros_service
+        Whether the ROS2 controller node should expose this gesture as a
+        service. False keeps it terminal/CLI-only - `dh5.cli` registers
+        every entry in `GESTURES` regardless of this flag.
+    """
 
     name: str
     summary: str
     variants: Mapping[str, Tuple[Pose, ...]]
     max_width: float = 0.0
     default_variant: str = "default"
+    ros_service: bool = True
 
     @property
     def is_scalable(self) -> bool:
@@ -96,6 +111,22 @@ GESTURES: Dict[str, Gesture] = {
             Pose(fixed={1: 99, 6: 99}, pause_after=1.0),
             Pose(fixed={axis: 30 for axis in (2, 3, 4, 5)}),
             Pose(fixed={axis: 99 for axis in (2, 3, 4, 5)}),
+        )},
+    ),
+    "wink2": Gesture(
+        name="wink2",
+        summary=(
+            "Axis 1 held at 99%, axis 6 at 20%; axes 2-5 dip to 20% and "
+            "back, each starting 0.25s after the previous one, overlapping "
+            "in flight. Terminal/CLI only, not exposed as a ROS2 service."
+        ),
+        ros_service=False,
+        variants={"default": (
+            Pose(fixed={1:99, 2:99, 3:99, 4:99, 5:99, 6:20}),
+            Pose(stagger=(
+                            (2, 20, 0.0), (3, 20, 0.25), (4, 20, 0.5), (5, 20, 0.75),
+                            (2, 99, 1.0), (3, 99, 1.25), (4, 99, 1.5), (5, 99, 1.75),
+            )),
         )},
     ),
     "point": Gesture(
@@ -189,12 +220,39 @@ def perform(
             if hand.position_percent(axis) < target:
                 hand.move_axis(axis, target, wait=True, poll_interval=poll_interval)
 
-        logger.info("%s: pose %d/%d -> %s", name, index, len(poses),
-                    {axis: round(value, 1) for axis, value in targets.items()})
-        results.append(hand.move(targets, wait=wait, poll_interval=poll_interval))
+        if pose.stagger:
+            logger.info("%s: pose %d/%d -> staggered %s", name, index, len(poses), pose.stagger)
+            results.append(_run_stagger(hand, pose.stagger, wait=wait, poll_interval=poll_interval))
+        else:
+            logger.info("%s: pose %d/%d -> %s", name, index, len(poses),
+                        {axis: round(value, 1) for axis, value in targets.items()})
+            results.append(hand.move(targets, wait=wait, poll_interval=poll_interval))
 
         if pose.pause_after:
             time.sleep(pose.pause_after)
+
+    return results
+
+
+def _run_stagger(
+    hand,
+    stagger: Tuple[Tuple[int, float, float], ...],
+    wait: bool,
+    poll_interval: Optional[float],
+) -> List:
+    """Issue each (axis, target, delay) at its scheduled offset from now,
+    without waiting for earlier moves to finish - so later axes start
+    while earlier ones are still travelling."""
+    start = time.monotonic()
+    results = []
+    for axis, target, delay in stagger:
+        remaining = delay - (time.monotonic() - start)
+        if remaining > 0:
+            time.sleep(remaining)
+        results.append(hand.move_axis(axis, target, wait=False, poll_interval=poll_interval))
+
+    if wait:
+        hand.wait_for_axes({axis for axis, _, _ in stagger}, poll_interval)
 
     return results
 

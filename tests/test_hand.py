@@ -174,8 +174,8 @@ class TestLifecycle:
         assert hand.initialize() is False
 
     def test_initialize_succeeds_when_all_axes_report_ready(self, hand):
-        assert hand.initialize(reg.INIT_MODE_OPEN, timeout=1, poll_interval=0) is True
+        assert hand.initialize(reg.INIT_MODE_OPEN, timeout=1, poll_interval=0, settle_after=0) is True
 
     def test_initialize_times_out_when_an_axis_never_finishes(self, hand, device):
         device.registers[reg.INITIALIZE_STATUS_REGISTER] = 0b10  # axis 1 still initializing
-        assert hand.initialize(reg.INIT_MODE_OPEN, timeout=0.05, poll_interval=0) is False
+        assert hand.initialize(reg.INIT_MODE_OPEN, timeout=0.05, poll_interval=0, settle_after=0) is False

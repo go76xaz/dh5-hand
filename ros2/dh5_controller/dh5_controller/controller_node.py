@@ -12,7 +12,8 @@ pip if you have it) before building.
 This node only translates ROS services into `DH5Hand` calls and back.
 
 Skill services are generated from `dh5.gestures.GESTURES`, so a new entry in
-that table becomes a new `dh5/<name>` service with no change here:
+that table becomes a new `dh5/<name>` service with no change here, unless
+its `ros_service` flag is False (terminal/CLI-only gestures):
 
     * gestures without a width  -> std_srvs/Trigger
     * gestures with a width     -> dh5_interfaces/TwoFingerPinch
@@ -147,6 +148,8 @@ class DH5Controller(Node):
 
         # --- Skills, one service per entry in the gesture table ----------
         for gesture in gestures.GESTURES.values():
+            if not gesture.ros_service:
+                continue
             srv_type = TwoFingerPinch if gesture.is_scalable else Trigger
             self.create_service(srv_type, f'dh5/{gesture.name}',
                                 self._make_gesture_cb(gesture), callback_group=self.hw_group)

@@ -105,6 +105,9 @@ def call(node, service, **fields):
 
 def test_one_service_per_gesture_with_the_right_type(node):
     for gesture in gestures.GESTURES.values():
+        if not gesture.ros_service:
+            assert f"dh5/{gesture.name}" not in node.services
+            continue
         srv_type, _ = node.services[f"dh5/{gesture.name}"]
         assert srv_type.__name__ == ("TwoFingerPinch" if gesture.is_scalable else "Trigger")
 

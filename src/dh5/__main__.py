@@ -22,7 +22,7 @@ import argparse
 import logging
 import sys
 
-from dh5 import DH5Hand, cli, configure_logging, registers
+from dh5 import DH5Hand, cli, configure_logging, hand, registers
 
 logger = logging.getLogger("dh5.startup")
 
@@ -67,7 +67,8 @@ def demo(hand: DH5Hand) -> None:
     position is never actually reached - which is what the original script
     did.
     """
-    logger.info("Demo: all axes to 60%%, then to 100%%.")
+    logger.info("Demo: all axes to 60%, then to 100%.")
+    # hand.move({axis: 50 for axis in hand.axes}, wait=True)
     hand.move({axis: 60 for axis in hand.axes}, wait=True)
     hand.move({axis: 99 for axis in hand.axes}, wait=True)
 
