@@ -31,12 +31,24 @@ class TestParsing:
     def test_fractional_values_survive(self):
         assert parse_axis_values(["2", "58.5"]) == {2: 58.5}
 
+    def test_all_sets_every_axis_to_the_same_value(self):
+        assert parse_axis_values(["all", "10"]) == {axis: 10.0 for axis in range(1, 7)}
+
+    def test_all_is_case_insensitive(self):
+        assert parse_axis_values(["ALL", "10"]) == {axis: 10.0 for axis in range(1, 7)}
+
+    def test_all_rejects_a_non_numeric_value(self):
+        with pytest.raises(UsageError):
+            parse_axis_values(["all", "fast"])
+
     @pytest.mark.parametrize("args", [
         [],                      # nothing
         ["2"],                   # odd length
         ["2", "100", "3"],       # odd length
         ["9", "100"],            # axis out of range
         ["2", "fast"],           # non-numeric value
+        ["all"],                 # 'all' with no value
+        ["all", "10", "20"],     # 'all' with extra arguments
     ])
     def test_malformed_pairs_are_usage_errors(self, args):
         with pytest.raises(UsageError):
@@ -101,6 +113,16 @@ class TestHandlers:
         self.run("setforce", hand, ["1", "35"])
         assert device.setpoints("force") == [35, 80, 80, 80, 80, 80]
 
+    def test_setspeed_all_sets_every_axis(self, hand, device):
+        self.run("setspeed", hand, ["all", "10"])
+        assert device.setpoints("speed") == [10] * reg.NUM_AXES
+
+    def test_setpos_all_moves_every_axis(self, hand, device):
+        self.run("setpos", hand, ["all", "50"])
+        assert device.setpoints("position") == [
+            round((reg.AXIS_LIMITS[axis][1]) * 0.5) for axis in range(1, reg.NUM_AXES + 1)
+        ]
+
     @pytest.mark.parametrize("name", ["getpos", "getspeed", "getforce", "getcurrent", "getstatus"])
     def test_readers_accept_all(self, name, hand):
         self.run(name, hand, ["all"])
@@ -113,15 +135,15 @@ class TestHandlers:
             self.run(name, hand, ["1", "2"])
 
     def test_getsensors_reads_one_finger(self, hand):
-        self.run("getsensors", hand, ["thumb"])
+        self.run("getsensors", hand, ["1"])
 
     def test_getsensors_reads_every_finger(self, hand):
         self.run("getsensors", hand, ["all"])
 
     def test_getsensors_raw_mode(self, hand):
-        self.run("getsensors", hand, ["thumb", "raw"])
+        self.run("getsensors", hand, ["1", "raw"])
 
-    @pytest.mark.parametrize("args", [["pinky"], ["thumb", "sideways"], ["thumb", "watch", "soon"]])
+    @pytest.mark.parametrize("args", [["pinky"], ["thumb"], ["6"], ["1", "sideways"], ["1", "watch", "soon"]])
     def test_getsensors_rejects_bad_arguments(self, hand, args):
         with pytest.raises(UsageError):
             self.run("getsensors", hand, args)

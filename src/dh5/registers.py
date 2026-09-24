@@ -57,6 +57,13 @@ INITIALIZE_COMMAND_REGISTER = 0x0100  # 2 bits per axis
 INITIALIZE_STATUS_REGISTER = 0x0200   # 2 bits per axis
 
 CURRENT_FAULT_REGISTER = 0x021F
+
+# Status, position/speed/current feedback and the current fault all live in
+# 0x0201..0x021F, so one read can fetch the whole axis state. 0x0219..0x021E
+# are undocumented; `DH5Hand.read_state` falls back to separate reads if the
+# hand refuses the block.
+STATE_BLOCK_START = AXIS_STATUS_BASE_REGISTER
+STATE_BLOCK_LENGTH = CURRENT_FAULT_REGISTER - AXIS_STATUS_BASE_REGISTER + 1
 HISTORY_FAULT_REGISTER = 0x0B00
 HISTORY_FAULT_COUNT = 0x3F
 # Carried over from the vendor's ROS2 driver (DH5.py); not cross-checked
@@ -85,15 +92,21 @@ SENSOR_CALIBRATION_REGISTER = 0x0505
 # --------------------------------------------------------------------------
 SENSOR_POINTS_PER_FINGER_REGISTER = 0x0222  # 2/16 = Saigan, 3 = Hualichuang
 
+# Fingers are numbered 1-5: 1 = thumb, 2 = index, 3 = middle, 4 = ring,
+# 5 = little.
 FINGER_SENSOR_BASE_REGISTER: Dict[str, int] = {
-    "thumb": 0x022A,
-    "index": 0x024A,
-    "middle": 0x026A,
-    "ring": 0x028A,
-    "little": 0x02AA,
+    "1": 0x022A,
+    "2": 0x024A,
+    "3": 0x026A,
+    "4": 0x028A,
+    "5": 0x02AA,
 }
 FINGERS = tuple(FINGER_SENSOR_BASE_REGISTER)
 MAX_SENSOR_POINTS_PER_FINGER = 16
+
+# Which fingertip sensor sits on the finger each axis moves. Both thumb
+# axes (1 = yaw, 6 = pitch) end in the thumb's sensor.
+AXIS_FINGER: Dict[int, str] = {1: "1", 2: "2", 3: "3", 4: "4", 5: "5", 6: "1"}
 
 # Number of sensor points that identifies a Hualichuang 3-axis sensor, whose
 # three raw values are (Mx, My, Fz) rather than independent pressure points.

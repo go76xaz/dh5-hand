@@ -39,7 +39,7 @@ INIT_MODE = registers.INIT_MODE_OPEN  # 1 = close, 2 = open, 3 = find total stro
 INIT_TIMEOUT = 20.0                   # seconds to wait for all axes
 INIT_POLL_INTERVAL = 0.5              # seconds between status checks
 
-START_SPEED = 5  # percent, applied to every axis at startup
+START_SPEED = 10  # percent, applied to every axis at startup
 START_FORCE = 100  # percent, applied to every axis at startup
 
 

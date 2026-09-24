@@ -33,16 +33,27 @@ class FakeDH5:
     """A DH5 that answers Modbus frames from an in-memory register file.
 
     Motion is instantaneous: reading a position feedback register returns
-    whatever was last written to the matching position setpoint. Speed
-    feedback always reads 0, exactly as a real stationary axis does - which
-    is what makes the setpoint/feedback regression test meaningful.
+    whatever was last written to the matching position setpoint, unless
+    `position_feedback` pins it. Speed feedback always reads 0, exactly as
+    a real stationary axis does - which is what makes the setpoint/feedback
+    regression test meaningful. Action registers (write 1, poll until 0)
+    complete instantly.
     """
+
+    ACTION_REGISTERS = (
+        reg.CLEAR_FAULTS_REGISTER,
+        reg.RESTART_SYSTEM_REGISTER,
+        reg.SENSOR_CALIBRATION_REGISTER,
+    )
 
     def __init__(self, modbus_id: int = 1, sensor_points: int = reg.HUALICHUANG_POINTS):
         self.modbus_id = modbus_id
         self.registers = {}
         self.writes = []       # [(address, [values])] in order
+        self.reads = []        # [(address, count)] in order
         self.exception_code = None  # set to force the next response to fail
+        self.refused_reads = set()  # (address, count) reads that always fail
+        self.position_feedback = {}  # axis -> raw position, overrides mirroring
 
         for axis in range(reg.NUM_AXES):
             self.registers[reg.SETPOINT_BASE["position"] + axis] = 0
@@ -60,8 +71,11 @@ class FakeDH5:
     def read(self, address: int) -> int:
         position_feedback = reg.FEEDBACK_BASE["position"]
         if position_feedback <= address < position_feedback + reg.NUM_AXES:
+            axis = address - position_feedback + 1
+            if axis in self.position_feedback:
+                return self.position_feedback[axis]
             # Instantaneous motion: feedback mirrors the setpoint.
-            return self.registers[reg.SETPOINT_BASE["position"] + (address - position_feedback)]
+            return self.registers[reg.SETPOINT_BASE["position"] + (axis - 1)]
         return self.registers.get(address, 0)
 
     def setpoints(self, kind: str):
@@ -74,6 +88,19 @@ class FakeDH5:
         raw = int(round(low + (high - low) * percent / 100.0))
         self.registers[reg.SETPOINT_BASE["position"] + (axis - 1)] = raw
 
+    def set_statuses(self, status: int, axes=range(1, reg.NUM_AXES + 1)) -> None:
+        for axis in axes:
+            self.registers[reg.AXIS_STATUS_BASE_REGISTER + (axis - 1)] = status
+
+    def set_fingertip(self, finger: str, mx: float, my: float, fz: float) -> None:
+        """Store a Hualichuang reading the way the real hand does: one
+        float per point, high word at the lower address."""
+        base = reg.FINGER_SENSOR_BASE_REGISTER[finger]
+        for point, value in enumerate((mx, my, fz)):
+            high, low = struct.unpack(">HH", struct.pack(">f", value))
+            self.registers[base + 2 * point] = high
+            self.registers[base + 2 * point + 1] = low
+
     # -- protocol -------------------------------------------------------
     def handle(self, frame: bytes) -> bytes:
         assert crc16(frame[:-2]) == struct.unpack("<H", frame[-2:])[0], "request CRC mismatch"
@@ -82,19 +109,24 @@ class FakeDH5:
         function_code = frame[1]
         address = struct.unpack(">H", frame[2:4])[0]
 
+        if function_code == reg.READ_HOLDING_REGISTERS:
+            count = struct.unpack(">H", frame[4:6])[0]
+            self.reads.append((address, count))
+            if (address, count) in self.refused_reads:
+                return self._with_crc(bytes([self.modbus_id, function_code | 0x80, 2]))
+
         if self.exception_code is not None:
             body = bytes([self.modbus_id, function_code | 0x80, self.exception_code])
             self.exception_code = None
             return self._with_crc(body)
 
         if function_code == reg.READ_HOLDING_REGISTERS:
-            count = struct.unpack(">H", frame[4:6])[0]
             payload = b"".join(struct.pack(">H", self.read(address + i) & 0xFFFF) for i in range(count))
             return self._with_crc(bytes([self.modbus_id, function_code, len(payload)]) + payload)
 
         if function_code == reg.WRITE_SINGLE_REGISTER:
             value = struct.unpack(">H", frame[4:6])[0]
-            self.registers[address] = value
+            self.registers[address] = 0 if address in self.ACTION_REGISTERS else value
             self.writes.append((address, [value]))
             return self._with_crc(frame[:6])
 

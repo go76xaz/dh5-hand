@@ -1,9 +1,11 @@
 """`DH5Hand`: percent moves, batch writes, and the setpoint/feedback split."""
 
+import time
+
 import pytest
 
 from dh5 import registers as reg
-from dh5.hand import DH5Hand, format_faults
+from dh5.hand import SETTLE_GRACE, STATE_BLOCK_MAX_FAILURES, DH5Hand, format_faults
 
 
 class TestSetpointVersusFeedback:
@@ -124,27 +126,27 @@ class TestSensors:
         assert hand.sensor_points_per_finger() == reg.HUALICHUANG_POINTS
 
     def test_reading_a_finger_returns_one_float_per_point(self, hand):
-        assert len(hand.read_finger("thumb", num_points=3)) == 3
+        assert len(hand.read_finger("1", num_points=3)) == 3
 
     def test_all_fingers_are_readable(self, hand):
         readings = hand.read_all_sensors(num_points=3)
         assert set(readings) == set(reg.FINGERS)
 
-    @pytest.mark.parametrize("finger", ["pinky", "", "THUMBS"])
+    @pytest.mark.parametrize("finger", ["pinky", "", "thumb", "0", "6"])
     def test_unknown_finger_is_rejected(self, hand, finger):
         with pytest.raises(ValueError):
             hand.read_finger(finger)
 
-    def test_finger_names_are_case_insensitive(self, hand):
-        assert hand.read_finger("THUMB", num_points=3) == hand.read_finger("thumb", num_points=3)
+    def test_finger_numbers_accept_ints_and_padding(self, hand):
+        assert hand.read_finger(1, num_points=3) == hand.read_finger(" 1 ", num_points=3)
 
     @pytest.mark.parametrize("num_points", [0, 17, -1])
     def test_point_count_must_fit_the_block(self, hand, num_points):
         with pytest.raises(ValueError):
-            hand.read_finger("thumb", num_points=num_points)
+            hand.read_finger("1", num_points=num_points)
 
     def test_full_reading_carries_raw_and_derived_values(self, hand):
-        reading = hand.read_finger_full("index")
+        reading = hand.read_finger_full("2")
         assert set(reading) == {"mx", "my", "fz", "fx", "fy"}
 
 
@@ -179,3 +181,109 @@ class TestLifecycle:
     def test_initialize_times_out_when_an_axis_never_finishes(self, hand, device):
         device.registers[reg.INITIALIZE_STATUS_REGISTER] = 0b10  # axis 1 still initializing
         assert hand.initialize(reg.INIT_MODE_OPEN, timeout=0.05, poll_interval=0, settle_after=0) is False
+
+
+class TestReadState:
+    def test_whole_state_comes_in_one_frame(self, hand, device):
+        hand.read_state()
+        assert device.reads == [(reg.STATE_BLOCK_START, reg.STATE_BLOCK_LENGTH)]
+
+    def test_state_values_are_decoded(self, hand, device):
+        device.set_position_percent(2, 50)
+        device.registers[reg.AXIS_STATUS_BASE_REGISTER + 2] = 2         # axis 3 stalled
+        device.registers[reg.FEEDBACK_BASE["speed"] + 1] = 0xFFFF       # axis 2 at -1 %
+        device.registers[reg.FEEDBACK_BASE["current"] + 3] = 250        # axis 4 at 250 mA
+        device.registers[reg.CURRENT_FAULT_REGISTER] = 0x04
+        state = hand.read_state()
+        assert state.position_percent[1] == pytest.approx(50, abs=0.1)
+        assert state.status == [1, 1, 2, 1, 1, 1]
+        assert state.speed[1] == -1
+        assert state.current[3] == 250
+        assert state.fault == 0x04
+
+    def test_a_refused_block_falls_back_to_separate_reads(self, hand, device):
+        device.refused_reads.add((reg.STATE_BLOCK_START, reg.STATE_BLOCK_LENGTH))
+        device.set_position_percent(5, 30)
+        assert hand.read_state().position_percent[4] == pytest.approx(30, abs=0.1)
+
+    def test_the_block_is_given_up_after_repeated_refusals(self, hand, device):
+        block = (reg.STATE_BLOCK_START, reg.STATE_BLOCK_LENGTH)
+        device.refused_reads.add(block)
+        for _ in range(STATE_BLOCK_MAX_FAILURES + 2):
+            hand.read_state()
+        assert device.reads.count(block) == STATE_BLOCK_MAX_FAILURES
+
+    def test_an_unreadable_state_raises(self, hand, device):
+        device.refused_reads.add((reg.STATE_BLOCK_START, reg.STATE_BLOCK_LENGTH))
+        device.refused_reads.add((reg.FEEDBACK_BASE["position"], reg.NUM_AXES))
+        with pytest.raises(ValueError):
+            hand.read_state()
+
+
+class TestSettling:
+    def test_moving_is_never_settled(self):
+        assert not DH5Hand.is_settled(2, 0, 500, 500, elapsed=10)
+
+    def test_stalled_is_always_settled(self):
+        assert DH5Hand.is_settled(2, 2, 0, 1600, elapsed=0)
+
+    def test_a_stale_reached_status_is_not_believed_right_after_a_move(self):
+        assert not DH5Hand.is_settled(2, 1, 0, 1600, elapsed=0)
+
+    def test_reached_near_the_target_is_settled_immediately(self):
+        assert DH5Hand.is_settled(2, 1, 1595, 1600, elapsed=0)
+
+    def test_after_the_grace_period_the_status_alone_decides(self):
+        assert DH5Hand.is_settled(2, 1, 0, 1600, elapsed=SETTLE_GRACE)
+
+
+class TestStop:
+    def test_hold_commands_the_measured_position(self, hand, device):
+        device.set_position_percent(2, 80)
+        device.set_position_percent(3, 80)
+        device.position_feedback[2] = 500
+        hand.hold_axes([2])
+        setpoints = device.setpoints("position")
+        assert setpoints[1] == 500
+        assert setpoints[2] == device.read(reg.FEEDBACK_BASE["position"] + 2)  # untouched
+        assert not hand.stop_requested
+
+    def test_stop_holds_every_axis_and_flags_the_stop(self, hand, device):
+        for axis in range(1, 7):
+            device.position_feedback[axis] = 100 + axis
+        hand.stop()
+        assert device.setpoints("position") == [101, 102, 103, 104, 105, 106]
+        assert hand.stop_requested
+        hand.clear_stop()
+        assert not hand.stop_requested
+
+    def test_a_stop_ends_a_wait_early(self, hand, device):
+        device.set_statuses(0)  # never arrives on its own
+        hand.stop()
+        started = time.monotonic()
+        hand.wait_for_axes([1, 2], poll_interval=0, timeout=5)
+        assert time.monotonic() - started < 1
+
+
+class TestFingertips:
+    def test_all_fingers_are_read_as_mx_my_fz(self, hand, device):
+        device.set_fingertip("3", 1.5, -2.25, 4.0)
+        readings = hand.read_fingertips()
+        assert set(readings) == set(reg.FINGERS)
+        assert readings["3"] == pytest.approx((1.5, -2.25, 4.0))
+        assert readings["1"] == (0.0, 0.0, 0.0)
+
+    def test_a_failed_finger_does_not_fail_the_others(self, hand, device):
+        device.refused_reads.add((reg.FINGER_SENSOR_BASE_REGISTER["4"], 6))
+        readings = hand.read_fingertips()
+        assert readings["4"] is None
+        assert readings["5"] == (0.0, 0.0, 0.0)
+
+    def test_calibration_waits_for_the_register_to_reset(self, hand, device):
+        assert hand.calibrate_sensors(timeout=1, poll_interval=0) is True
+        assert (reg.SENSOR_CALIBRATION_REGISTER, [1]) in device.writes
+
+    def test_zero_check_flags_fingers_still_under_load(self, hand, device):
+        assert hand.check_sensors_zeroed() == []
+        device.set_fingertip("2", 10.0, 0.0, 0.0)
+        assert hand.check_sensors_zeroed() == ["2"]

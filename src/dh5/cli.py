@@ -65,9 +65,17 @@ def parse_axes(arg: str, num_axes: int = reg.NUM_AXES) -> List[int]:
 
 
 def parse_axis_values(args: Sequence[str], num_axes: int = reg.NUM_AXES) -> Dict[int, float]:
-    """Parse a flat '<axis> <value> [<axis> <value> ...]' sequence."""
+    """Parse a flat '<axis> <value> [<axis> <value> ...]' sequence, or
+    'all <value>' to apply the same value to every axis."""
+    if len(args) == 2 and args[0].lower() == "all":
+        try:
+            value = float(args[1])
+        except ValueError:
+            raise UsageError(f"Invalid value {args[1]!r}. Must be a number.") from None
+        return {axis: value for axis in range(1, num_axes + 1)}
+
     if not args or len(args) % 2 != 0:
-        raise UsageError("Expected pairs of <axis> <value>.")
+        raise UsageError("Expected pairs of <axis> <value>, or 'all <value>'.")
 
     axis_values: Dict[int, float] = {}
     for axis_str, value_str in zip(args[::2], args[1::2]):
@@ -130,8 +138,9 @@ def _check_range(name: str, values: Dict[int, float], low: float, high: float) -
             raise UsageError(f"{name} for axis {axis} is {value:g}; must be {low:g}-{high:g}.")
 
 
-@command("setpos", "setpos <axis> <percent> [<axis> <percent> ...]",
-         "Move axes to percent positions (0-100). Several pairs move together in one frame.")
+@command("setpos", "setpos <axis> <percent> [<axis> <percent> ...] | setpos all <percent>",
+         "Move axes to percent positions (0-100). Several pairs move together in one frame; "
+         "'all <percent>' moves every axis to the same position.")
 def _setpos(hand, args):
     targets = parse_axis_values(args, hand.num_axes)
     _check_range("Position", targets, 0, 100)
@@ -147,8 +156,9 @@ def _setpos(hand, args):
             logger.info("Axis %d reached position.", axis)
 
 
-@command("setspeed", "setspeed <axis> <value> [<axis> <value> ...]",
-         "Set axis speed (1-100). Axes not listed keep their current setpoint.")
+@command("setspeed", "setspeed <axis> <value> [<axis> <value> ...] | setspeed all <value>",
+         "Set axis speed (1-100). Axes not listed keep their current setpoint; "
+         "'all <value>' sets every axis to the same speed.")
 def _setspeed(hand, args):
     values = parse_axis_values(args, hand.num_axes)
     _check_range("Speed", values, 1, 100)
@@ -156,8 +166,9 @@ def _setspeed(hand, args):
     _report_write(hand, f"setspeed {ints}", hand.set_speeds(ints))
 
 
-@command("setforce", "setforce <axis> <value> [<axis> <value> ...]",
-         "Set axis force (20-100). Axes not listed keep their current setpoint.")
+@command("setforce", "setforce <axis> <value> [<axis> <value> ...] | setforce all <value>",
+         "Set axis force (20-100). Axes not listed keep their current setpoint; "
+         "'all <value>' sets every axis to the same force.")
 def _setforce(hand, args):
     values = parse_axis_values(args, hand.num_axes)
     _check_range("Force", values, 20, 100)
@@ -208,8 +219,8 @@ def _getstatus(hand, args):
         logger.info("Axis %d: %s", axis, hand.axis_status_label(axis))
 
 
-@command("getsensors", "getsensors <finger|all> [raw|watch] [interval]",
-         "Read fingertip sensors. 'raw' dumps registers with both byte orders; "
+@command("getsensors", "getsensors <1-5|all> [raw|watch] [interval]",
+         "Read fingertip sensors (1=thumb .. 5=little). 'raw' dumps registers with both byte orders; "
          "'watch' polls every [interval] seconds until Ctrl+C.")
 def _getsensors(hand, args):
     if not 1 <= len(args) <= 3:

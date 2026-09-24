@@ -6,6 +6,7 @@ Layers, bottom to top:
     dh5.conversions   raw registers <-> percent / float, pure functions
     dh5.modbus        DH5ModbusAPI - serial Modbus RTU transport
     dh5.hand          DH5Hand - axes, percent, simultaneous moves, sensors
+    dh5.sensors       stale-data and contact detection for fingertip readings
     dh5.gestures      poses as data plus one runner
     dh5.cli           the interactive DH5> prompt
 
@@ -21,9 +22,9 @@ Typical use::
 
 import logging
 
-from . import conversions, gestures, registers
+from . import conversions, gestures, registers, sensors
 from .gestures import GESTURES, Gesture, Pose, perform
-from .hand import DH5Hand, MoveResult, format_faults
+from .hand import DH5Hand, HandState, MoveResult, format_faults
 from .modbus import DH5ModbusAPI
 
 __version__ = "1.0.0"
@@ -33,6 +34,7 @@ __all__ = [
     "DH5ModbusAPI",
     "GESTURES",
     "Gesture",
+    "HandState",
     "MoveResult",
     "Pose",
     "configure_logging",
@@ -41,6 +43,7 @@ __all__ = [
     "gestures",
     "perform",
     "registers",
+    "sensors",
 ]
 
 

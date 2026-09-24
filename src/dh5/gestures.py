@@ -116,13 +116,13 @@ GESTURES: Dict[str, Gesture] = {
     "wink2": Gesture(
         name="wink2",
         summary=(
-            "Axis 1 held at 99%, axis 6 at 20%; axes 2-5 dip to 20% and "
-            "back, each starting 0.25s after the previous one, overlapping "
-            "in flight. Terminal/CLI only, not exposed as a ROS2 service."
+            "Thumb axes held at 99%; axes 2-5 dip to 20% and back, each "
+            "starting 0.25s after the previous one, overlapping in flight. "
+            "Terminal/CLI only, not exposed as a ROS2 service."
         ),
         ros_service=False,
         variants={"default": (
-            Pose(fixed={1:99, 2:99, 3:99, 4:99, 5:99, 6:20}),
+            Pose(fixed={1:99, 2:99, 3:99, 4:99, 5:99, 6:99}),
             Pose(stagger=(
                             (2, 20, 0.0), (3, 20, 0.25), (4, 20, 0.5), (5, 20, 0.75),
                             (2, 99, 1.0), (3, 99, 1.25), (4, 99, 1.5), (5, 99, 1.75),
@@ -199,7 +199,9 @@ def perform(
 
     Returns the list of `MoveResult`s, one per pose, or None if a pose's
     `require_above` precondition was not met - matching how the original
-    gesture functions refused to move and returned None.
+    gesture functions refused to move and returned None. After
+    `hand.stop()` the remaining poses are skipped and the results so far
+    are returned; check `hand.stop_requested` to tell the two apart.
     """
     gesture = get(name)
     poses = gesture.poses(variant)
@@ -211,6 +213,9 @@ def perform(
 
     results = []
     for index, pose in enumerate(poses, start=1):
+        if hand.stop_requested:
+            logger.info("%s: stopped before pose %d/%d.", name, index, len(poses))
+            return results
         targets = pose.targets(width, gesture.max_width)
 
         if not _preconditions_met(hand, name, pose, targets):
@@ -249,10 +254,15 @@ def _run_stagger(
         remaining = delay - (time.monotonic() - start)
         if remaining > 0:
             time.sleep(remaining)
+        if hand.stop_requested:
+            return results
         results.append(hand.move_axis(axis, target, wait=False, poll_interval=poll_interval))
 
     if wait:
-        hand.wait_for_axes({axis for axis, _, _ in stagger}, poll_interval)
+        # Later entries for the same axis overwrite earlier ones, leaving
+        # each axis's final target.
+        targets = {axis: position for move in results for axis, position in move.positions.items()}
+        hand.wait_for_axes(set(targets), poll_interval, targets=targets)
 
     return results
 

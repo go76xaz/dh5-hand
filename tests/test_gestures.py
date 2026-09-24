@@ -97,6 +97,13 @@ class TestPerform:
         open_everything(device)
         assert gestures.perform(hand, "round_grip", wait=False) is not None
 
+    def test_a_stopped_gesture_skips_its_remaining_poses(self, hand, device):
+        open_everything(device)
+        hand.stop()
+        writes_before = len(device.writes)
+        assert gestures.perform(hand, "wink", wait=False) == []
+        assert len(device.writes) == writes_before
+
     def test_a_blocked_gesture_writes_nothing(self, hand, device):
         for axis in range(1, 7):
             device.set_position_percent(axis, 0)
@@ -141,7 +148,7 @@ class TestPerform:
 
         assert len(results) == 2
         assert device.setpoints("position")[0] == round(reg.AXIS_LIMITS[1][1] * 0.99)  # axis 1
-        assert device.setpoints("position")[5] == round(reg.AXIS_LIMITS[6][1] * 0.20)  # axis 6
+        assert device.setpoints("position")[5] == round(reg.AXIS_LIMITS[6][1] * 0.99)  # axis 6
 
         stagger_writes = [w for w in device.writes if len(w[1]) == 1]
         assert len(stagger_writes) == 8

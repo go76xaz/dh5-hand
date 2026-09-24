@@ -64,11 +64,30 @@ source install/setup.bash
 ros2 launch dh5_controller controller.launch.py port:=/dev/ttyUSB0
 ```
 
-Launch arguments: `port`, `baud_rate`, `modbus_id`, `publish_period`.
+Launch arguments (all passed through as node parameters):
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `port`, `baud_rate`, `modbus_id` | `/dev/ttyUSB0`, `115200`, `1` | serial connection |
+| `state_rate_hz` | `10.0` | rate of `dh5/AxisInfos` and `dh5/joint_states` |
+| `sensor_rate_hz` | `10.0` | rate of `dh5/fingertips` |
+| `stale_timeout` | `1.0` | seconds without any change before a fingertip is flagged stale |
+| `move_poll_interval` | `0.05` | seconds between status polls while a move runs |
+| `contact_threshold` | `0.5` | default change of (mx, my, fz) that counts as contact |
+| `move_timeout` | `30.0` | default timeout of a `dh5/move_axes` goal, seconds |
+| `publish_period` | - | deprecated, use `state_rate_hz` |
+
+Both publishers share one serial bus. The node logs the time one read cycle
+really takes after startup; if it warns that a rate cannot be reached, lower it.
 
 | Interface | Type | Purpose |
 | --- | --- | --- |
-| `dh5/AxisInfos` (topic) | `AxisInfos` | position, velocity, current, faults of every axis |
+| `dh5/AxisInfos` (topic) | `AxisInfos` | raw and percent position, velocity, current, status (moving / reached / stalled), faults of every axis |
+| `dh5/joint_states` (topic) | `sensor_msgs/JointState` | position of every axis in **percent of stroke** (not radians) |
+| `dh5/fingertips` (topic) | `FingertipArray` | mx, my, fz of every fingertip plus a `stale` flag for frozen data; only on 3-axis (Hualichuang) sensors |
+| `dh5/move_axes` (action) | `MoveAxes` | non-blocking move with optional per-axis speed/force, progress feedback, cancel, and optional stop on fingertip contact |
+| `dh5/stop` | `std_srvs/Trigger` | stop every axis where it is; also ends a running move, gesture or action |
+| `dh5/calibrate_sensors` | `std_srvs/Trigger` | zero the fingertip sensors - hand at rest, nothing touching the fingertips |
 | `dh5/initialize` | `Initialize` | initialize the hand (mode 1 close, 2 open, 3 find stroke) |
 | `dh5/set_axis_position`, `set_axis_speed`, `set_axis_force`, `move_axis_percent` | `SetAxisValue` | one axis |
 | `dh5/move_axes_percent`, `set_axes_speed` | `MoveAxesPercent`, `SetAxesValues` | several axes at once, others left untouched |
@@ -81,7 +100,24 @@ ros2 service call /dh5/initialize dh5_interfaces/srv/Initialize "{mode: 2}"
 ros2 service call /dh5/open_hand std_srvs/srv/Trigger
 ros2 service call /dh5/two_finger_pinch dh5_interfaces/srv/TwoFingerPinch "{width: 10, axis_mode: 'axis2'}"
 ros2 topic echo /dh5/AxisInfos
+
+ros2 service call /dh5/calibrate_sensors std_srvs/srv/Trigger
+ros2 topic echo /dh5/fingertips
+# close index and middle at 30 % speed, each stopping as soon as it touches something
+ros2 action send_goal --feedback /dh5/move_axes dh5_interfaces/action/MoveAxes \
+  "{axes: [2, 3], percents: [0.0, 0.0], speeds: [30, 30], stop_on_contact: true}"
+ros2 service call /dh5/stop std_srvs/srv/Trigger
 ```
+
+Commands (services and action goals) run one at a time; one that arrives while
+another runs is refused as busy. `dh5/stop` is the exception and works at any
+time. The DH5 has no stop register, so stopping commands each axis's measured
+position as its new target, which means a small overshoot of one bus round trip.
+
+`stop_on_contact` compares each finger's reading against the one taken when
+the goal started, so sensor drift does not matter. Axes 1 and 6 both use the
+thumb sensor. A finger whose data freezes cannot report contact; the result
+message says so.
 
 Adding an entry to `GESTURES` gives both the `DH5>` prompt and the ROS 2 node a
 new command; no other file changes.

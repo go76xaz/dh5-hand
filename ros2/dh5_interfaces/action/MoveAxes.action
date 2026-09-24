@@ -1,0 +1,27 @@
+# Move one or more axes to percent positions without blocking the caller,
+# with progress feedback, cancel, and an optional stop on fingertip contact.
+# All arrays in goal, result and feedback are aligned with `axes`.
+
+# Goal
+int32[] axes                # 1-6
+float64[] percents          # target per axis, 0-100
+int32[] speeds              # optional speed setpoint (percent) per axis; empty = keep current
+int32[] forces              # optional force setpoint (percent) per axis; empty = keep current
+bool stop_on_contact        # stop each axis as soon as its fingertip sensor reports contact
+                            # (axes 1 and 6 both use the thumb's sensor)
+float32 contact_threshold   # change of the (mx, my, fz) reading since the goal started that
+                            # counts as contact; <= 0 uses the node's contact_threshold parameter
+float32 timeout             # seconds; <= 0 uses the node's move_timeout parameter
+---
+# Result
+bool success                # false on timeout, stop, cancel or error
+string message
+float64[] final_percents
+uint8[] final_status        # 0 moving, 1 reached position, 2 stalled
+int32[] contact_axes        # axes stopped by fingertip contact
+int32[] stalled_axes        # axes that stalled (e.g. hit the force limit on an object)
+---
+# Feedback
+float64[] percents
+uint8[] status
+bool[] contact

@@ -15,6 +15,7 @@ class gets wrong on its own:
 """
 
 import logging
+import threading
 import time
 from typing import Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
@@ -26,6 +27,7 @@ from .conversions import (
     position_to_percent,
     registers_to_float,
     registers_to_floats,
+    signed16,
 )
 from .modbus import DH5ModbusAPI
 
@@ -36,6 +38,15 @@ logger = logging.getLogger(__name__)
 # sensor's natural zero-point noise is larger.
 SENSOR_ZERO_TOLERANCE = 5.0
 
+# How close (percent of stroke) an axis must be to its target before a
+# "reached" status is believed right after a move was sent - see
+# `DH5Hand.is_settled`.
+SETTLE_TOLERANCE_PERCENT = 2.0
+SETTLE_GRACE = 0.5  # seconds
+
+# The state block read is given up after this many failures in a row.
+STATE_BLOCK_MAX_FAILURES = 3
+
 
 class MoveResult(NamedTuple):
     """What a move returned. Unpacks as the `(result, positions, statuses)`
@@ -44,6 +55,18 @@ class MoveResult(NamedTuple):
     result: object
     positions: Dict[int, int]
     statuses: Optional[Dict[int, int]]
+
+
+class HandState(NamedTuple):
+    """One snapshot of every axis, as `DH5Hand.read_state()` returns it.
+    Lists are indexed by axis - 1."""
+
+    status: List[int]              # 0 moving, 1 reached position, 2 stalled
+    position: List[int]            # raw feedback, 0.01 mm
+    position_percent: List[float]  # feedback as percent of stroke
+    speed: List[int]               # feedback, percent (signed)
+    current: List[int]             # feedback, mA (signed)
+    fault: int                     # current fault register
 
 
 def format_fault_code(code):
@@ -67,6 +90,12 @@ def format_faults(faults):
     if isinstance(faults, (list, tuple)):
         return [format_fault_code(code) for code in faults]
     return format_fault_code(faults)
+
+
+def _is_register_list(response, count: int) -> bool:
+    """Whether a Modbus read came back as `count` register values rather
+    than an error code or message."""
+    return isinstance(response, (list, tuple)) and len(response) == count
 
 
 class DH5Hand:
@@ -106,6 +135,8 @@ class DH5Hand:
         self.num_axes = num_axes
         self.poll_interval = poll_interval
         self.byte_order = byte_order
+        self._stop_event = threading.Event()
+        self._state_block_failures = 0
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -260,6 +291,84 @@ class DH5Hand:
         status = self.axis_status(axis)
         return reg.AXIS_STATUS_LABELS.get(status, str(status))
 
+    def read_state(self) -> HandState:
+        """Status, position/speed/current feedback and the current fault of
+        every axis.
+
+        Normally one Modbus frame over 0x0201..0x021F. If the hand refuses
+        that block (it spans a few undocumented registers), this falls back
+        to one read per register group, and after
+        `STATE_BLOCK_MAX_FAILURES` refusals in a row it stops trying the
+        block at all. Raises ValueError if the state cannot be read.
+        """
+        block = None
+        if self._state_block_failures < STATE_BLOCK_MAX_FAILURES:
+            block = self.api.read_block(reg.STATE_BLOCK_START, reg.STATE_BLOCK_LENGTH)
+            if _is_register_list(block, reg.STATE_BLOCK_LENGTH):
+                self._state_block_failures = 0
+            else:
+                self._state_block_failures += 1
+                if self._state_block_failures == STATE_BLOCK_MAX_FAILURES:
+                    logger.warning("Combined state read refused %d times (last: %r); "
+                                   "using separate reads from now on.", STATE_BLOCK_MAX_FAILURES, block)
+                block = None
+
+        if block is not None:
+            def group(start, count=reg.NUM_AXES):
+                offset = start - reg.STATE_BLOCK_START
+                return list(block[offset:offset + count])
+
+            status = group(reg.AXIS_STATUS_BASE_REGISTER)
+            position = group(reg.FEEDBACK_BASE["position"])
+            speed = group(reg.FEEDBACK_BASE["speed"])
+            current = group(reg.FEEDBACK_BASE["current"])
+            fault = group(reg.CURRENT_FAULT_REGISTER, 1)[0]
+        else:
+            status = self._read_axis_group(reg.AXIS_STATUS_BASE_REGISTER)
+            position = self._read_axis_group(reg.FEEDBACK_BASE["position"])
+            speed = self._read_axis_group(reg.FEEDBACK_BASE["speed"])
+            current = self._read_axis_group(reg.FEEDBACK_BASE["current"])
+            fault_response = self.api.get_cur_faults()
+            if not _is_register_list(fault_response, 1):
+                raise ValueError(f"Reading the current fault returned {fault_response!r}")
+            fault = fault_response[0]
+
+        position = [value & 0xFFFF for value in position]
+        return HandState(
+            status=status,
+            position=position,
+            position_percent=[
+                position_to_percent(raw, reg.AXIS_LIMITS[axis])
+                for axis, raw in enumerate(position, start=1)
+            ],
+            speed=[signed16(value) for value in speed],
+            current=[signed16(value) for value in current],
+            fault=fault,
+        )
+
+    def _read_axis_group(self, start: int) -> List[int]:
+        response = self.api.read_block(start, reg.NUM_AXES)
+        if not _is_register_list(response, reg.NUM_AXES):
+            raise ValueError(f"Reading registers from 0x{start:04X} returned {response!r}")
+        return list(response)
+
+    @staticmethod
+    def is_settled(axis: int, status: int, position: int, target: Optional[int], elapsed: float) -> bool:
+        """Whether `axis` has finished a move towards raw `target`.
+
+        Right after a new target is written, the status register can still
+        say 'reached position' from the previous move for a moment. So
+        within `SETTLE_GRACE` seconds of the command, 'reached' only counts
+        if the axis is also near its target; after that, the status alone
+        decides. 'Stalled' always counts as finished.
+        """
+        if status == 0:
+            return False
+        if status != 1 or target is None or elapsed >= SETTLE_GRACE:
+            return True
+        low, high = reg.AXIS_LIMITS[axis]
+        return abs(position - target) <= (high - low) * SETTLE_TOLERANCE_PERCENT / 100.0
+
     @property
     def axes(self) -> List[int]:
         return list(range(1, self.num_axes + 1))
@@ -272,27 +381,98 @@ class DH5Hand:
     # Motion
     # ------------------------------------------------------------------
     def wait_for_axes(self, axes: Iterable[int], poll_interval: Optional[float] = None,
-                      timeout: Optional[float] = 30.0) -> Dict[int, int]:
-        """Poll `axes` until none of them still report 'moving'.
+                      timeout: Optional[float] = 30.0,
+                      targets: Optional[Mapping[int, int]] = None) -> Dict[int, int]:
+        """Poll `axes` until none of them is still moving, or `stop()` is
+        called.
 
-        Returns {axis: final_status}. Gives up after `timeout` seconds
-        (pass None to wait forever) so a stalled axis that never leaves
-        state 0 cannot hang the caller indefinitely.
+        `targets` ({axis: raw position}) lets a fresh move be told apart
+        from a stale 'reached' status - see `is_settled`. Returns
+        {axis: final_status}. Gives up after `timeout` seconds (pass None
+        to wait forever) so a stalled axis that never leaves state 0
+        cannot hang the caller indefinitely.
         """
         poll_interval = self.poll_interval if poll_interval is None else poll_interval
         axes = list(axes)
-        deadline = None if timeout is None else time.monotonic() + timeout
+        targets = targets or {}
+        started = time.monotonic()
+        deadline = None if timeout is None else started + timeout
+        statuses: Dict[int, int] = {}
 
         while True:
             time.sleep(poll_interval)
-            statuses = {axis: self.axis_status(axis) for axis in axes}
-            moving = [axis for axis, status in statuses.items() if status == 0]
-            if not moving:
+            try:
+                state = self.read_state()
+            except ValueError as exc:
+                logger.warning("State read failed while waiting: %s", exc)
+            else:
+                elapsed = time.monotonic() - started
+                statuses = {axis: state.status[axis - 1] for axis in axes}
+                moving = [
+                    axis for axis in axes
+                    if not self.is_settled(axis, statuses[axis], state.position[axis - 1],
+                                           targets.get(axis), elapsed)
+                ]
+                if not moving:
+                    return statuses
+                logger.debug("...axes still moving: %s", moving)
+            if self.stop_requested:
+                logger.info("Stopped while waiting for axes %s.", axes)
                 return statuses
             if deadline is not None and time.monotonic() > deadline:
-                logger.warning("Timed out after %.1fs with axes still moving: %s", timeout, moving)
+                logger.warning("Timed out after %.1fs with axes still moving: %s", timeout,
+                               [axis for axis in axes if statuses.get(axis, 0) == 0])
                 return statuses
-            logger.debug("...axes still moving: %s", moving)
+
+    # ------------------------------------------------------------------
+    # Stopping
+    # ------------------------------------------------------------------
+    @property
+    def stop_requested(self) -> bool:
+        """True from `stop()` until `clear_stop()`. Waits and gestures in
+        progress give up as soon as they see it."""
+        return self._stop_event.is_set()
+
+    def clear_stop(self) -> None:
+        """Re-arm after a `stop()`; call before starting a new command."""
+        self._stop_event.clear()
+
+    def stop(self, axes: Optional[Iterable[int]] = None):
+        """Stop `axes` (default: all) where they are, and flag the stop so
+        that a running `wait_for_axes()` or gesture gives up instead of
+        carrying on with its next step. Safe to call from another thread
+        while a move is in progress."""
+        self._stop_event.set()
+        return self.hold_axes(self.axes if axes is None else axes)
+
+    def hold_axes(self, axes: Iterable[int]):
+        """Make `axes` stop where they are by commanding their measured
+        position as their new target. Other axes are not affected and no
+        stop is flagged - this is what a per-finger contact stop uses.
+
+        The DH5 has no stop register, so this is the one place a feedback
+        value is deliberately written back into a setpoint. Expect a small
+        overshoot: the axis keeps moving for one bus round trip.
+        """
+        axes = sorted(set(axes))
+        if not axes:
+            raise ValueError("At least one axis must be given.")
+        for axis in axes:
+            self._validate_axis(axis)
+
+        feedback = self.api.read_block(reg.FEEDBACK_BASE["position"], reg.NUM_AXES)
+        if not _is_register_list(feedback, reg.NUM_AXES):
+            logger.error("Cannot hold axes %s: position read returned %r", axes, feedback)
+            return feedback
+
+        positions = {axis: feedback[axis - 1] & 0xFFFF for axis in axes}
+        if len(positions) == 1:
+            (axis, position), = positions.items()
+            result = self.api.set_axis_position(axis, position)
+        else:
+            result = self._write_axis_block("position", positions)
+        logger.info("hold%s at %s -> %s", axes, positions, result)
+        return result
 
     def move(
         self,
@@ -325,7 +505,7 @@ class DH5Hand:
 
         statuses = None
         if wait and result == self.api.SUCCESS:
-            statuses = self.wait_for_axes(positions, poll_interval)
+            statuses = self.wait_for_axes(positions, poll_interval, targets=positions)
             for axis in sorted(statuses):
                 logger.info("Axis %d: %s", axis, reg.AXIS_STATUS_LABELS.get(statuses[axis], statuses[axis]))
 
@@ -382,7 +562,10 @@ class DH5Hand:
         is their current SETPOINT, read back from the same block - writing
         feedback here would quietly re-command every other axis.
         """
-        full_block = self.api.read_block(reg.SETPOINT_BASE[kind], reg.NUM_AXES)
+        if set(axis_values) >= set(range(1, reg.NUM_AXES + 1)):
+            full_block = [0] * reg.NUM_AXES  # every axis given, nothing to fill in
+        else:
+            full_block = self.api.read_block(reg.SETPOINT_BASE[kind], reg.NUM_AXES)
         if not isinstance(full_block, (list, tuple)) or len(full_block) != reg.NUM_AXES:
             # Fall back to one read per axis if the block read failed, so a
             # transient error doesn't turn into a write of garbage.
@@ -450,6 +633,21 @@ class DH5Hand:
             for finger in reg.FINGERS
         }
 
+    def read_fingertips(self) -> Dict[str, Optional[Tuple[float, float, float]]]:
+        """(mx, my, fz) for every finger of a Hualichuang hand, one small
+        read per finger. A finger whose read fails maps to None rather
+        than failing the others."""
+        readings: Dict[str, Optional[Tuple[float, float, float]]] = {}
+        for finger in reg.FINGERS:
+            try:
+                mx, my, fz = self.read_finger(finger, num_points=reg.HUALICHUANG_POINTS)
+            except ValueError as exc:
+                logger.debug("Fingertip %s read failed: %s", finger, exc)
+                readings[finger] = None
+            else:
+                readings[finger] = (mx, my, fz)
+        return readings
+
     def dump_finger_sensor_raw(self, finger: str, num_points: int = 3) -> None:
         """Print one finger's raw registers next to BOTH possible float
         conversions. Use this once to confirm which byte order your sensor
@@ -476,7 +674,7 @@ class DH5Hand:
             )
 
     def _sensor_block(self, finger: str, num_points: Optional[int]) -> Tuple[int, int]:
-        finger = finger.lower()
+        finger = str(finger).strip()
         if finger not in reg.FINGER_SENSOR_BASE_REGISTER:
             raise ValueError(f"Invalid finger {finger!r}. Must be one of {list(reg.FINGERS)}.")
         if num_points is None:
@@ -573,25 +771,36 @@ class DH5Hand:
             return True
 
         logger.info("Running post-calibration sanity check (reading all fingers)...")
+        return not self.check_sensors_zeroed()
+
+    def check_sensors_zeroed(self) -> List[str]:
+        """Read every finger once and return the ones further than
+        `SENSOR_ZERO_TOLERANCE` from zero - empty after a good calibration.
+        A finger that cannot be read counts as flagged."""
         num_points = self.sensor_points_per_finger()
         flagged = []
         for finger in reg.FINGERS:
-            if num_points == reg.HUALICHUANG_POINTS:
-                reading = self.read_finger_full(finger)
-                worst = max(abs(reading[k]) for k in ("mx", "my", "fz"))
-                logger.info("  %s: Mx=%.4f  My=%.4f  Fz=%.4f",
-                            finger, reading["mx"], reading["my"], reading["fz"])
-            else:
-                values = self.read_finger(finger, num_points=num_points)
-                worst = max((abs(v) for v in values), default=0.0)
-                logger.info("  %s: %s", finger, [round(v, 4) for v in values])
+            try:
+                if num_points == reg.HUALICHUANG_POINTS:
+                    reading = self.read_finger_full(finger)
+                    worst = max(abs(reading[k]) for k in ("mx", "my", "fz"))
+                    logger.info("  %s: Mx=%.4f  My=%.4f  Fz=%.4f",
+                                finger, reading["mx"], reading["my"], reading["fz"])
+                else:
+                    values = self.read_finger(finger, num_points=num_points)
+                    worst = max((abs(v) for v in values), default=0.0)
+                    logger.info("  %s: %s", finger, [round(v, 4) for v in values])
+            except ValueError as exc:
+                logger.warning("    ! %s could not be read: %s", finger, exc)
+                flagged.append(finger)
+                continue
             if worst > SENSOR_ZERO_TOLERANCE:
                 logger.warning("    ! %s still reads ~%.2f away from zero - check for contact.", finger, worst)
                 flagged.append(finger)
 
         if flagged:
             logger.error("Still non-zero after calibration: %s. Clear them and re-run.", ", ".join(flagged))
-            return False
-        logger.info("All fingers read close to zero - calibration looks good.")
-        return True
+        else:
+            logger.info("All fingers read close to zero - calibration looks good.")
+        return flagged
 

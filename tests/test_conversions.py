@@ -12,6 +12,7 @@ from dh5.conversions import (
     position_to_percent,
     registers_to_float,
     registers_to_floats,
+    signed16,
 )
 
 
@@ -105,3 +106,8 @@ class TestHualichuang:
         _, fy_low = hualichuang_tangential_force(1.0, 0.0, 0.0)
         _, fy_high = hualichuang_tangential_force(1.0, 0.0, 1000.0)
         assert fy_low == fy_high
+
+
+@pytest.mark.parametrize("raw, expected", [(0, 0), (1, 1), (0x7FFF, 32767), (0x8000, -32768), (0xFFFF, -1)])
+def test_signed16(raw, expected):
+    assert signed16(raw) == expected

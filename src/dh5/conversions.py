@@ -22,6 +22,12 @@ def first_value(response):
     return response
 
 
+def signed16(value: int) -> int:
+    """Modbus registers arrive unsigned; speed and current feedback are signed."""
+    value = int(value) & 0xFFFF
+    return value - 0x10000 if value & 0x8000 else value
+
+
 def percent_to_position(percent: float, limits: Tuple[int, int]) -> int:
     """Map 0-100 % onto an axis's raw stroke, clamped to both ends."""
     percent = min(100.0, max(0.0, float(percent)))
